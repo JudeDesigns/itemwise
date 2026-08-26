@@ -159,6 +159,28 @@ def test_suite_is_still_healthy():
 
 Verdicts assigned per item: `dead` · `backwards` · `weak` · `acceptable` · `strong`.
 
+## Run on a real benchmark
+
+[`analysis/swebench/`](analysis/swebench/) applies itemwise to SWE-bench Verified,
+using the per-instance results all 134 public leaderboard submissions publish.
+
+```bash
+cd analysis/swebench && python3 analyse.py
+```
+
+Among the top 25 systems, 270 of the 500 instances are dead — every one of them
+solves it, or none do. Among the top 5, 394 are. The 230 that still carry
+information reproduce the full 500-instance ranking exactly. And all 24 adjacent
+pairs in the top 25 sit inside the suite's own 95% error bar: a bootstrap over
+instances puts three different systems at 36%, 34% and 23% likely to be
+genuinely first.
+
+`validate.py` in that directory re-derives both claims by methods that share none
+of classical test theory's assumptions. It is also what killed this library's
+first published finding — see [CHANGELOG.md](CHANGELOG.md).
+
+---
+
 ### On calling an item backwards
 
 A negative `r_pb` is not evidence of a broken grader. On a suite of 200 items

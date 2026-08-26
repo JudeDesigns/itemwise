@@ -39,12 +39,37 @@ def to_text(report: "Report", max_items: int = 20) -> str:
     if backwards:
         add("-" * 72)
         add(f"BACKWARDS ITEMS ({len(backwards)}) - fix these first")
-        add("  Weaker models pass these more often than stronger ones.")
-        add("  That is nearly always a broken grader, not a real finding.")
+        add("  Weaker models pass these more often than stronger ones, by more")
+        add("  than chance explains. That is nearly always a broken grader.")
+        add(f"  Tested against the null that the item is unrelated to ability,")
+        add(f"  corrected across all {report.n_items} items at FDR {report.backwards_fdr:g}.")
         add("-" * 72)
         for s in backwards:
-            add(f"  {s.item.id:<32} r_pb={s.point_biserial:+.3f}  p={s.difficulty:.2f}")
+            pv = "" if s.backwards_p is None else f"{s.backwards_p:.5f}"
+            add(f"  {s.item.id:<32} r_pb={s.point_biserial:+.3f}  "
+                f"passed={s.difficulty:.2f}  p={pv}")
         add("")
+    elif not report.backwards_detectable():
+        add("-" * 72)
+        add("BACKWARDS ITEMS - CANNOT BE ASSESSED")
+        add("-" * 72)
+        add(f"  {report.n_models} models is too few. With this many, even a perfectly")
+        add(f"  inverted item cannot reach p <= {report.backwards_fdr:g}, so an empty list here")
+        add("  means 'no evidence either way' - not 'no broken graders'.")
+        shortlist = report.suspicious_items()[:5]
+        if shortlist:
+            add("  Pointing the wrong way, unproven, worth a look if you add models:")
+            for s in shortlist:
+                add(f"    {s.item.id:<30} r_pb={s.point_biserial:+.3f}  "
+                    f"p={s.backwards_p:.3f}")
+        add("")
+    else:
+        suspicious = report.suspicious_items()
+        if suspicious:
+            add(f"  no backwards items survive correction at FDR "
+                f"{report.backwards_fdr:g} "
+                f"({len(suspicious)} point the wrong way, none beyond chance)")
+            add("")
 
     if dead:
         always = [s for s in dead if s.difficulty == 1.0]

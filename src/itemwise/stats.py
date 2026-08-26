@@ -192,3 +192,154 @@ def standard_error_of_measurement(item_matrix: Sequence[Scores]) -> float:
     sd = math.sqrt(variance(totals))
     alpha = cronbach_alpha(items)
     return sd * math.sqrt(max(0.0, 1.0 - alpha))
+
+
+def backwards_p_value(item_scores: Scores, total_scores: Sequence[float]) -> float | None:
+    """How surprising it would be for this item to look this backwards by chance.
+
+    An item is "backwards" when the models that pass it are the ones that do
+    *worse* on the rest of the suite. A raw negative correlation is not enough
+    to conclude that: with a handful of models, or with an item almost everyone
+    passes, negative correlations arise constantly from noise alone. Acting on
+    them means chasing graders that were never broken.
+
+    So we test it. Under the null hypothesis "this item is unrelated to ability",
+    the k models that passed it are just a uniformly random subset of the n
+    models. The correlation with the rest-score is a strictly increasing
+    function of
+
+        S = sum of the rest-scores of the models that passed,
+
+    so P(correlation this low or lower) is exactly P(S <= observed S) - the
+    lower tail of a sum drawn without replacement from the rest-scores. That
+    quantity does not depend on the item at all, which is what makes this a
+    genuine test rather than another threshold.
+
+    Note that the rest-score is used deliberately: it excludes the item itself,
+    so permuting the item cannot change what it is being correlated against.
+    The test is exact.
+
+    Returns the one-tailed p-value, or ``None`` when the item has no variance
+    (everyone passed or everyone failed - there is nothing to test).
+
+    The p-value is computed exactly by counting subsets when that is cheap, and
+    by a normal approximation to the sampling distribution otherwise. See
+    :func:`backwards_p_method` if you need to know which was used.
+    """
+    s = _validate(item_scores, "item_scores")
+    totals = [float(t) for t in total_scores]
+    if len(s) != len(totals):
+        raise ValueError("item_scores and total_scores must be the same length")
+
+    n = len(s)
+    k = sum(s)
+    if k == 0 or k == n:
+        return None
+
+    rest = [t - si for t, si in zip(totals, s)]
+    observed = sum(r for r, si in zip(rest, s) if si == 1)
+
+    mean_rest = sum(rest) / n
+    var_rest = sum((r - mean_rest) ** 2 for r in rest) / n
+    if var_rest == 0.0:
+        # Every model scores the same on the rest of the suite: the item cannot
+        # be backwards with respect to an ability ordering that does not exist.
+        return None
+
+    exact = _exact_lower_tail(rest, k, observed)
+    if exact is not None:
+        return exact
+
+    mu = k * mean_rest
+    sd = math.sqrt(k * (n - k) / (n - 1) * var_rest)
+    z = (observed + 0.5 - mu) / sd
+    return 0.5 * (1.0 + math.erf(z / math.sqrt(2)))
+
+
+def backwards_p_method(item_scores: Scores, total_scores: Sequence[float]) -> str:
+    """``"exact"``, ``"normal"`` or ``"undefined"`` - how the p-value was reached."""
+    s = _validate(item_scores, "item_scores")
+    totals = [float(t) for t in total_scores]
+    n, k = len(s), sum(s)
+    if k == 0 or k == n:
+        return "undefined"
+    rest = [t - si for t, si in zip(totals, s)]
+    mean_rest = sum(rest) / n
+    if sum((r - mean_rest) ** 2 for r in rest) == 0.0:
+        return "undefined"
+    return "exact" if _exact_is_affordable(rest, k) else "normal"
+
+
+# Budget on the dynamic-programming table below. Comfortably fast in pure
+# Python for the cohort sizes item analysis is actually run on, and it degrades
+# to a normal approximation rather than to a hang.
+_EXACT_BUDGET = 5_000_000
+
+
+def _exact_is_affordable(rest: Sequence[float], k: int) -> bool:
+    ints = [r for r in rest if float(r).is_integer()]
+    if len(ints) != len(rest):
+        return False
+    lo, hi = min(rest), max(rest)
+    span = int(round(k * (hi - lo)))
+    return len(rest) * k * (span + 1) <= _EXACT_BUDGET
+
+
+def _exact_lower_tail(rest: Sequence[float], k: int, observed: float) -> float | None:
+    """P(S <= observed) for S a sum of k of the rest-scores, drawn without
+    replacement. Exact subset counting; ``None`` when that is too expensive."""
+    if not _exact_is_affordable(rest, k):
+        return None
+
+    lo = min(rest)
+    values = [int(round(r - lo)) for r in rest]
+    target = int(math.floor(observed - k * lo + 1e-9))
+    span = sum(sorted(values, reverse=True)[:k])
+    if target < 0:
+        return 0.0
+    if target >= span:
+        return 1.0
+
+    # ways[j][s] = number of j-subsets summing to s
+    ways = [[0] * (span + 1) for _ in range(k + 1)]
+    ways[0][0] = 1
+    for v in values:
+        for j in range(k, 0, -1):
+            row, prev = ways[j], ways[j - 1]
+            for s_ in range(span, v - 1, -1):
+                if prev[s_ - v]:
+                    row[s_] += prev[s_ - v]
+
+    total = sum(ways[k])
+    if total == 0:
+        return None
+    return sum(ways[k][: target + 1]) / total
+
+
+def benjamini_hochberg(p_values: Sequence[float | None], q: float = 0.05) -> list[bool]:
+    """Which p-values survive a false-discovery-rate correction at level ``q``.
+
+    A suite has hundreds of items. Testing every one of them at p < 0.05 and
+    reporting the hits would manufacture roughly 5% of the suite as findings.
+    Benjamini-Hochberg controls the expected share of *false* findings among
+    those reported instead, which is the guarantee that matters when the output
+    is a list of items for a human to go and investigate.
+
+    ``None`` entries (items with no variance) are never selected.
+    """
+    if not 0.0 < q < 1.0:
+        raise ValueError(f"q must be between 0 and 1, got {q}")
+    indexed = [(p, i) for i, p in enumerate(p_values) if p is not None]
+    out = [False] * len(p_values)
+    if not indexed:
+        return out
+    indexed.sort()
+    m = len(indexed)
+    cutoff = 0
+    for rank, (p, _) in enumerate(indexed, 1):
+        if p <= q * rank / m:
+            cutoff = rank
+    for rank, (_, i) in enumerate(indexed, 1):
+        if rank <= cutoff:
+            out[i] = True
+    return out

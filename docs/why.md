@@ -111,6 +111,62 @@ the total before correlating. Without that correction every item is partly
 correlated with itself, which inflates the statistic — severely on short suites.
 Many tools skip the correction. It makes results look better and it is wrong.
 
+### Backwards items — and why a negative number is not a finding
+
+itemwise 0.1 called an item backwards whenever `r_pb < -0.05`. That was wrong,
+and it is worth being explicit about how wrong, because the mistake is the
+natural one to make.
+
+A negative correlation is not rare. On a suite where nothing at all is broken,
+each item's pass set is effectively a random subset of your models, and a large
+share of those subsets will correlate negatively with ability by chance. Run 200
+items past 20 models and you will get dozens of negative correlations from noise
+alone. A fixed threshold reports every one of them as a broken grader, and the
+engineer who goes to check finds nothing — twice, after which they stop checking.
+
+The first real dataset this library was pointed at made the point cleanly: 134
+public submissions to SWE-bench Verified, 500 instances each. The old rule
+flagged 37 backwards items among the top 25 systems. A randomisation that
+preserved both item difficulties and system totals produces 44.7 +/- 4.0 by pure
+chance. The observed count was *below* the null. Every one of those 37 findings
+was noise.
+
+So the question has to be asked properly: **if this item were unrelated to
+ability, how often would the models that passed it score this badly on the rest
+of the suite?**
+
+That has an exact answer. Correlate the item against the *rest-score* — the total
+with this item removed — and permuting which models passed cannot change what the
+item is being correlated against. The correlation is then a strictly increasing
+function of
+
+```
+S = sum of the rest-scores of the models that passed
+```
+
+so `P(correlation <= observed)` is exactly `P(S <= observed S)`: the lower tail of
+a sum drawn without replacement from the rest-scores. Of the `C(n, k)` ways that
+`k` of your `n` models could have passed, count how many are at least this
+backwards. No simulation, no distributional assumption, no threshold.
+
+Then correct for multiplicity. A suite has hundreds of items; testing each at
+`p < 0.05` and reporting the hits manufactures roughly 5% of the suite as
+findings. Benjamini–Hochberg controls the expected share of false findings among
+those reported, which is the guarantee that matters when the output is a list of
+items for a human to go and investigate.
+
+**The uncomfortable consequence.** The smallest p-value reachable is `1 / C(n, k)`,
+because the observed split is one of that many equally likely ones. With five
+models the most extreme possible item scores `p = 0.1` at best. Below roughly
+eight models, no item can be called backwards at all — not because your suite is
+clean, but because you have not run enough models to know. `report.backwards_detectable()`
+says whether you are in that regime, and an empty backwards list there means
+*cannot tell*, not *nothing wrong*.
+
+This is a real limitation and it is stated rather than hidden, because the
+alternative — a threshold that always produces findings — is how eval tooling
+loses the trust of the engineers using it.
+
 ### Reliability — Cronbach's alpha
 
 ```
@@ -247,8 +303,10 @@ stated plainly. 2PL IRT is on the roadmap.
 
 ## What to actually do with it
 
-1. **Fix backwards items first.** A negative `r_pb` is nearly always a broken
-   grader, and a broken grader is actively misleading you right now.
+1. **Fix backwards items first.** An item that survives the significance test is
+   nearly always a broken grader, and a broken grader is actively misleading you
+   right now. Check `backwards_detectable()` before reading an empty list as good
+   news.
 2. **Retire or rewrite dead items.** Immediate, permanent cost reduction.
 3. **Split the suite if alpha is low.** You are averaging unrelated constructs into
    one meaningless number.

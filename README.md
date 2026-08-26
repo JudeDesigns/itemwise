@@ -20,20 +20,23 @@ Here is `itemwise` on a realistic 40-item suite across 5 models:
 
 ```
   items                40
-  models compared      5
-  Cronbach's alpha     0.882  (good)
-  carrying signal      45%
-  dead weight          55% of every run
+  models compared      12
+  Cronbach's alpha     0.860  (good)
+  std error of meas.   1.93 items
+  carrying signal      48%
+  dead weight          52% of every run
 
 BACKWARDS ITEMS (3) - fix these first
-  Weaker models pass these more often than stronger ones.
-  That is nearly always a broken grader, not a real finding.
-  format-00                        r_pb=-0.904  p=0.40
-  format-01                        r_pb=-0.904  p=0.40
-  format-02                        r_pb=-0.904  p=0.40
+  Weaker models pass these more often than stronger ones, by more
+  than chance explains. That is nearly always a broken grader.
+  Tested against the null that the item is unrelated to ability,
+  corrected across all 40 items at FDR 0.05.
+  format-00                        r_pb=-0.845  passed=0.42  p=0.00253
+  format-01                        r_pb=-0.845  passed=0.42  p=0.00253
+  format-02                        r_pb=-0.845  passed=0.42  p=0.00253
 
-DEAD ITEMS (19) - retire or rewrite
-  every model passes (14): smoke-00 ... reasoning-01
+DEAD ITEMS (18) - retire or rewrite
+  every model passes (13): smoke-00 ... reasoning-01
   no model passes (5) - check the grader before the prompt: frontier-00 ...
 
 MODEL TOTALS
@@ -103,7 +106,9 @@ Then act on it:
 
 ```python
 report.dead_items()        # zero information - retire or rewrite
-report.backwards_items()   # weak models beat strong ones - check the grader
+report.backwards_items()   # weak models beat strong ones, beyond chance
+report.suspicious_items()  # point the wrong way, not yet provable
+report.backwards_detectable()  # do you have enough models to even ask?
 report.ranked()            # every item, most informative first
 report.wasted_fraction     # what share of each run informs nothing
 report.separates("a", "b") # is the gap between two models real?
@@ -148,10 +153,33 @@ def test_suite_is_still_healthy():
 | **Difficulty** | `p` | Proportion of models that passed. `1.0` = everyone passed, `0.0` = nobody did. Both extremes carry zero information. |
 | **Discrimination index** | `D` | Top 27% pass rate minus bottom 27%. `≥0.40` excellent, `0.20–0.29` marginal, negative means the item is backwards. |
 | **Point-biserial** | `r_pb` | Correlation between passing this item and overall score. More trustworthy than `D` because it uses every model, not just the extremes. **Corrected by default** — the item's own contribution is removed from the total, since otherwise every item correlates with itself. |
+| **Backwards p-value** | `p` | For each item: if it were unrelated to model ability, how often would the models that passed it score this badly on the rest of the suite? Counted exactly where possible. Corrected across the suite with Benjamini–Hochberg before anything is called backwards. |
 | **Cronbach's alpha** | `α` | Internal consistency. `0.80–0.89` good; `≥0.90` may mean near-duplicate items; `<0.60` means the suite is measuring several unrelated things and should be split. |
 | **Standard error** | `SEM` | How much of a score is noise. Drives `min_real_gap()` and `separates()`. |
 
 Verdicts assigned per item: `dead` · `backwards` · `weak` · `acceptable` · `strong`.
+
+### On calling an item backwards
+
+A negative `r_pb` is not evidence of a broken grader. On a suite of 200 items
+compared across 20 models with nothing wrong anywhere, dozens of items will
+correlate negatively with ability by chance alone — and a fixed threshold like
+`r_pb < -0.05` will report every one of them as a finding.
+
+So itemwise tests it. The item's rest-score excludes the item itself, so
+permuting which models passed cannot change what it is correlated against, and
+the null distribution can be counted exactly: of the `C(n, k)` ways `k` of your
+`n` models could have passed, how many look at least this backwards? The
+resulting p-values are then corrected across the whole suite.
+
+This has a consequence worth knowing before you rely on it. With `n` models the
+smallest reachable p-value is `1 / C(n, k)`, so **below about eight models no
+item can be called backwards at all**, however inverted it looks. `report.backwards_detectable()`
+tells you whether you are in that regime; when it returns `False`, an empty
+backwards list means *cannot tell*, not *nothing wrong*. `report.suspicious_items()`
+gives you the shortlist to revisit once you have run more models.
+
+Raise or lower the bar with `analyze(result, backwards_fdr=0.10)`.
 
 ---
 

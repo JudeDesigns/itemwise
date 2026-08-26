@@ -23,6 +23,9 @@ from .analysis import ItemStats, Report, analyze
 from .models import Item, RunResult, Suite
 from .report import to_html, to_text
 from .stats import (
+    backwards_p_method,
+    backwards_p_value,
+    benjamini_hochberg,
     cronbach_alpha,
     difficulty,
     discrimination_index,
@@ -30,10 +33,13 @@ from .stats import (
     standard_error_of_measurement,
 )
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 __all__ = [
     "Item",
+    "backwards_p_method",
+    "backwards_p_value",
+    "benjamini_hochberg",
     "ItemStats",
     "Report",
     "RunResult",

@@ -9,10 +9,17 @@ from itemwise import RunResult, Suite, analyze, to_html, to_text
 
 random.seed(7)
 
-MODELS = ["frontier-a", "frontier-b", "mid-tier", "small-open", "tiny-open"]
-# Latent ability per model, 0..1 - the ground truth we are pretending not to know.
-ABILITY = {"frontier-a": 0.92, "frontier-b": 0.88, "mid-tier": 0.70,
-           "small-open": 0.48, "tiny-open": 0.30}
+# Twelve models, not five. That is deliberate: the backwards test is exact, and
+# with five models the most extreme possible split is still one of only ten, so
+# no item can ever clear a 0.05 bar. A suite is only as diagnosable as the
+# number of models you ran it on. See Report.backwards_detectable().
+ABILITY = {
+    "frontier-a": 0.94, "frontier-b": 0.91, "frontier-c": 0.88,
+    "strong-a": 0.82, "strong-b": 0.78, "mid-tier-a": 0.71,
+    "mid-tier-b": 0.66, "mid-tier-c": 0.59, "small-open-a": 0.51,
+    "small-open-b": 0.45, "tiny-open-a": 0.36, "tiny-open-b": 0.28,
+}
+MODELS = list(ABILITY)
 
 
 def build_suite() -> tuple[Suite, dict[str, list[int]]]:
@@ -55,6 +62,8 @@ def main() -> None:
     print(f"Suite size:            {report.n_items} items")
     print(f"Dead weight:           {report.wasted_fraction:.0%}")
     print(f"Backwards items:       {[s.item.id for s in report.backwards_items()]}")
+    print(f"Backwards test usable: {report.backwards_detectable()} "
+          f"({report.n_models} models)")
     print(f"Min. real gap (95%):   {report.min_real_gap():.2f} items")
 
     keep = [s for s in report.stats if s.verdict in ("acceptable", "strong")]

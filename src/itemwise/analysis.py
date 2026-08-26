@@ -8,6 +8,8 @@ from typing import Literal
 
 from .models import Item, RunResult
 from .stats import (
+    backwards_p_value,
+    benjamini_hochberg,
     cronbach_alpha,
     difficulty,
     discrimination_index,
@@ -34,12 +36,14 @@ class ItemStats:
     point_biserial: float
     n_pass: int
     n_models: int
+    backwards_p: float | None = None
+    backwards_significant: bool = False
 
     @property
     def verdict(self) -> Verdict:
         if self.difficulty in (0.0, 1.0):
             return "dead"
-        if self.point_biserial < -0.05:
+        if self.backwards_significant:
             return "backwards"
         if self.point_biserial < 0.20:
             return "weak"
@@ -62,10 +66,19 @@ class ItemStats:
                 "or the grader is wrong. Check the grader first; it usually is."
             )
         if self.verdict == "backwards":
+            p = "" if self.backwards_p is None else f" (p={self.backwards_p:.4f})"
             return (
-                "Weaker models pass this more often than stronger ones. That "
-                "almost always means a broken grader, an ambiguous prompt, or a "
-                "case rewarding a shortcut. Investigate before trusting it."
+                "Weaker models pass this more often than stronger ones, by more "
+                f"than chance explains{p}. That usually means a broken grader, an "
+                "ambiguous prompt, or a case rewarding a shortcut. Investigate "
+                "before trusting it."
+            )
+        if self.verdict == "weak" and self.point_biserial < 0.0:
+            p = "" if self.backwards_p is None else f" p={self.backwards_p:.2f}"
+            return (
+                "Points slightly the wrong way, but not by more than noise would "
+                f"produce on its own{p}. Not evidence of a broken grader. It is "
+                "still carrying no usable signal."
             )
         if self.verdict == "weak":
             return (
@@ -86,6 +99,7 @@ class Report:
     sem: float
     models: list[str]
     model_totals: dict[str, int]
+    backwards_fdr: float = 0.05
 
     # ---- item selections -------------------------------------------------
 
@@ -157,6 +171,41 @@ class Report:
         gap = abs(self.model_totals[model_a] - self.model_totals[model_b])
         return gap > self.min_real_gap(confidence)
 
+    @property
+    def n_models(self) -> int:
+        return len(self.models)
+
+    def backwards_detectable(self) -> bool:
+        """Could a backwards item be established at all, with this many models?
+
+        The backwards test is exact: with n models and k passing an item, the
+        smallest p-value reachable is 1 / C(n, k), because the observed split is
+        one of that many equally likely splits. Below roughly eight models even a
+        perfectly inverted item cannot clear the significance bar - not because
+        the suite is clean, but because there is not enough evidence to say so.
+
+        When this returns False, an empty backwards list means "cannot tell",
+        not "nothing wrong". Add models before drawing a conclusion.
+        """
+        n = self.n_models
+        return any(
+            1.0 / math.comb(n, k) <= self.backwards_fdr for k in range(1, n)
+        )
+
+    def suspicious_items(self) -> list[ItemStats]:
+        """Items pointing the wrong way that the evidence cannot yet convict.
+
+        These are not findings. They are the shortlist to re-examine if you add
+        more models, ordered by how unlikely they already look.
+        """
+        out = [
+            s for s in self.stats
+            if not s.backwards_significant
+            and s.backwards_p is not None
+            and s.point_biserial < 0.0
+        ]
+        return sorted(out, key=lambda s: s.backwards_p or 1.0)
+
     def alpha_verdict(self) -> str:
         a = self.alpha
         if a >= 0.90:
@@ -170,8 +219,20 @@ class Report:
         return "low - this suite may be measuring several unrelated things"
 
 
-def analyze(result: RunResult) -> Report:
-    """Compute item and suite diagnostics for a completed run."""
+def analyze(result: RunResult, backwards_fdr: float = 0.05) -> Report:
+    """Compute item and suite diagnostics for a completed run.
+
+    ``backwards_fdr`` is the false-discovery rate allowed when calling items
+    backwards. Every item is tested against the null that it is unrelated to
+    model ability, and the resulting p-values are corrected across the whole
+    suite - so the expected share of mistakes among the items reported as
+    backwards is at most this. Raise it to widen the net, lower it to be
+    stricter. Setting it high enough to catch everything will also catch noise;
+    that is the trade, and it is now yours to make explicitly rather than a
+    hard-coded threshold making it for you.
+    """
+    if not 0.0 < backwards_fdr < 1.0:
+        raise ValueError(f"backwards_fdr must be between 0 and 1, got {backwards_fdr}")
     if len(result.models) < 2:
         raise ValueError(
             "item analysis needs at least 2 models to compare - with one model "
@@ -182,6 +243,9 @@ def analyze(result: RunResult) -> Report:
 
     totals = result.total_scores()
     matrix = result.item_matrix()
+
+    p_values = [backwards_p_value(row, totals) for row in matrix]
+    flagged = benjamini_hochberg(p_values, q=backwards_fdr)
 
     stats: list[ItemStats] = []
     for i, item in enumerate(result.suite.items):
@@ -195,6 +259,10 @@ def analyze(result: RunResult) -> Report:
                 point_biserial=point_biserial(row, totals, corrected=True),
                 n_pass=sum(row),
                 n_models=len(row),
+                backwards_p=p_values[i],
+                backwards_significant=flagged[i] and point_biserial(
+                    row, totals, corrected=True
+                ) < 0.0,
             )
         )
 
@@ -204,4 +272,5 @@ def analyze(result: RunResult) -> Report:
         sem=standard_error_of_measurement(matrix),
         models=result.models,
         model_totals={m: int(sum(result.scores[m])) for m in result.models},
+        backwards_fdr=backwards_fdr,
     )

@@ -119,16 +119,47 @@ def test_best_item_ranks_first():
     assert report.ranked()[0].item.id == "splits-clean"
 
 
-def test_backwards_item_is_detected_and_diagnosed():
-    """An item only the worst model passes must be flagged, not merely ranked low."""
+def test_backwards_is_not_claimed_when_four_models_cannot_establish_it():
+    """With 4 models the most extreme split is 1 of C(4,2)=6, so p >= 1/6.
+
+    No item can clear a 0.05 bar. The honest output is an empty list plus a
+    warning that the cohort is too small - not a confident accusation.
+    """
     scores = dict(SCORES)
     scores["strong-model"] = [1, 0, 1, 1, 0]
     scores["poor-model"] = [1, 0, 0, 0, 1]
     report = analyze(RunResult(Suite.from_dicts(ITEMS), scores))
-    flagged = {s.item.id for s in report.backwards_items()}
-    assert "most-pass" in flagged
-    diag = next(s for s in report.stats if s.item.id == "most-pass").diagnosis
-    assert "grader" in diag
+
+    assert report.backwards_items() == []
+    assert report.backwards_detectable() is False
+
+    # ...but the item is still on the shortlist, pointing the wrong way.
+    suspicious = [s.item.id for s in report.suspicious_items()]
+    assert "most-pass" in suspicious
+    stat = next(s for s in report.stats if s.item.id == "most-pass")
+    assert stat.point_biserial < 0.0
+    assert stat.backwards_p is not None and stat.backwards_p > 0.05
+    assert "not by more than noise" in stat.diagnosis
+
+
+def test_backwards_item_is_detected_once_there_are_enough_models():
+    """The same broken item, with a cohort big enough to convict it."""
+    n = 12
+    items = [{"id": f"fair-{i:02d}"} for i in range(20)] + [{"id": "broken"}]
+    models = [f"m{i:02d}" for i in range(n)]  # m00 strongest
+    scores = {}
+    for rank, m in enumerate(models):
+        fair = [1 if rank <= i else 0 for i in range(20)]
+        scores[m] = fair + [1 if rank >= n // 2 else 0]  # only the weak half pass
+
+    report = analyze(RunResult(Suite.from_dicts(items), scores))
+    assert report.backwards_detectable() is True
+    assert [s.item.id for s in report.backwards_items()] == ["broken"]
+
+    stat = next(s for s in report.stats if s.item.id == "broken")
+    assert stat.backwards_significant
+    assert stat.backwards_p < 0.01
+    assert "grader" in stat.diagnosis
 
 
 def test_analysis_refuses_a_single_model():
